@@ -3,8 +3,6 @@ import numpy as np
 from statsmodels.stats.multitest import fdrcorrection
 from scipy.stats import linregress as lrs
 
-import hw2_regression as reg
-
 
 def filtering(genotypes, strains):
     relevant_strains = [column for column in genotypes.columns if column in strains]
