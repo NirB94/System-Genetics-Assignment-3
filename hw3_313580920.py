@@ -1,7 +1,11 @@
+from copy import deepcopy
+
+import matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
 from statsmodels.stats.multitest import fdrcorrection
 from scipy.stats import linregress as lrs
+import seaborn as sns
 
 
 def filtering(genotypes, strains):
@@ -57,6 +61,117 @@ def association_model(genotypes_df, expression_df, alpha=0.05):
     return final_mat
 
 
+def create_gene_map_loc(mgi_df, p_vals_df):
+    mgi_df = deepcopy(mgi_df)
+    mgi_df.index = mgi_df['marker symbol']
+    mgi_df = mgi_df[['representative genome chromosome', 'representative genome start', 'representative genome end']]
+    relevant_gene_loc = mgi_df[mgi_df.index.isin(p_vals_df.index)]
+    relevant_gene_loc.columns = ['chromosome', 'start', 'end']
+    mgi_df = mgi_df.dropna(inplace=False)
+    return relevant_gene_loc, mgi_df
+
+
+def cis_trans(snp, gene):
+    if int(gene['chromosome']) == snp['Chr_Build37']:
+        position_snp = snp['Build37_position']
+        if np.abs(position_snp - gene['start']) <= 2000000 or np.abs(position_snp - gene['end']) <= 2000000:
+            return 'cis'
+        else:
+            return 'trans'
+    return 'trans'
+
+
+def all_loci(gene, genotypes_df):
+    d = {}
+    for i in range(len(genotypes_df)):
+        d[i] = cis_trans(genotypes_df.iloc[i], gene)
+    return pd.Series(d)
+
+
+def cis_trans_for_all_loci(genes, genotypes_df, every_loci):
+    d = {}
+    for i in range(len(genes)):
+        d[genes.iloc[i].name] = (every_loci(genes.iloc[i], genotypes_df))
+    d = pd.DataFrame(d).T
+    d.index.rename('marker symbol', inplace=True)
+    d = d.rename({i: every_loci[i] for i in range(len(list(d.columns)))}, axis='columns')
+    return d
+
+
+def count_significant_cis_trans(p_values, cis_trans_s):
+    combined = pd.DataFrame(p_values.unstack().rename('p_values')).join(cis_trans_s.rename_axis('data').unstack().rename('cis-trans'))
+    counts_df = pd.DataFrame(combined.loc[combined.p_values <= 0.05, 'cis-trans']).reset_index()
+    counts_df.rename({'level_0': 'snp'}, axis=1, inplace=True)
+    val_counts = counts_df['cis-trans'].value_counts()
+    counts_dict = {'Significant': val_counts['trans'] + val_counts['cis'], 'Cis': val_counts['cis'], 'Trans': val_counts['trans']}
+    return counts_df, counts_dict
+
+
+def eQTL_association_df(p_values, filtered_genotypes_df):
+    p_values2 = p_values.reset_index()
+    p_values2 = p_values2.drop('data', axis=1)
+    sum_of_eQTL = (p_values2 < 0.05).sum()
+    eQTL_df = pd.DataFrame({'Count': sum_of_eQTL})
+    filtered_genotypes_df['Chr_Build37'].index = eQTL_df.index
+    return pd.DataFrame(eQTL_df).join(filtered_genotypes_df['Chr_Build37'])
+
+
+def plot_eQTL(eQTL_df):
+    eQTL_df['place'] = range(len(eQTL_df))
+    eQTL_sorted = eQTL_df.sort_values('Chr_Build37')
+    eQTL_sorted.groupby('Chr_Build37')
+    eQTL_df.reset_index(inplace=True, drop=True)
+    eQTL_df['index'] = eQTL_df.index
+    sns.set(font_scale=1.25)
+    sns.set_style('dark')
+    plot = sns.relplot(data=eQTL_df, x='index', y='Count', aspect=3.7, hue='Chr_Build37', palette='dark', legend=None, s=200)
+    chrom_df = eQTL_df.groupby('Chr_Build37')['index'].median()
+    plot.ax.set_xlabel('Chromosome No.')
+    plot.ax.set_xticks(chrom_df)
+    plot.ax.set_xticklabels(chrom_df.index)
+    plot.fig.suptitle('Number of genes associated with each eQTL')
+    plot.set(yticks=[i for i in range(0,4)])
+    plt.savefig('genes-eQTLS association.png')
+    plt.show()
+
+
+def create_eQTL_ditribution_data(p_values, cis_trans):
+    df = pd.DataFrame(p_values.unstack().rename("p_values")).join(
+        cis_trans.rename_axis("data").unstack().rename("cis_trans"))
+    filter_arr = lambda x: df.loc[df['cis_trans'] == x, 'p_values'].to_numpy()
+    cis_arr, trans_arr = filter_arr('cis'), filter_arr('trans')
+    log_cis_arr, log_trans_arr = -np.log10(cis_arr), -np.log10(trans_arr)
+    significant_cis_arr, significant_trans_arr = cis_arr[cis_arr <= 0.05], trans_arr[trans_arr <= 0.05]
+    log_significant_cis_arr, log_significant_trans_arr = -np.log10(significant_cis_arr), -np.log10(
+        significant_trans_arr)
+    return log_significant_cis_arr, log_significant_trans_arr, log_cis_arr, log_trans_arr
+
+
+def plot_distribution_graph(cis, trans):
+    cis, trans = np.array(list(cis)), np.array(list(trans))
+    print(cis)
+    print(trans)
+    g = sns.kdeplot(cis, color="r", label='Cis')
+    sns.kdeplot(trans, color="b", label='Trans', bw=0.3)
+    plt.legend(loc='upper right')
+    g.set_ylabel('Density')
+    g.set_xlabel('-log p value')
+    plt.show()
+
+
+def create_snp_gene_df(sig_df, genotypes_df, relevant_gene_map_loc_df):
+    df = relevant_gene_map_loc_df.merge(sig_df, right_on='data', left_index=True)
+    df['gene location'] = (df['start'] + df['end']) / 2
+    df.drop(['start', 'end'], axis=1, inplace=True)
+    df['snp'] = df['snp'].astype(int)
+    df = df.merge(genotypes_df[['Chr_Build37', 'Build37_position']], left_on='snp', right_index=True)
+    columns = ['gene name', 'gene location', 'gene chromosome', 'snp name', 'snp location', 'snp chromosome', 'cis-trans']
+    df.rename({'Chr_Build37': 'snp chromosome', 'Build37_position': 'snp location', 'snp': 'snp name'}, axis=1,
+               inplace=True)
+    df = df[columns]
+    return df
+
+
 if __name__ == '__main__':
     genotypes_file = pd.read_excel('genotypes.xls', skiprows=1).drop(0, axis=1)
     txt_file = "dendritic_PAM_stimulation.txt"
@@ -67,5 +182,29 @@ if __name__ == '__main__':
     # p_vals = association_model(genotypes, strains)  ## Takes a long time, csv attached and imported in the line below:
     p_vals = pd.read_csv("after association test.csv")
 
-    locations_file = "MGI_Coordinates.Build37.rpt.txt"
-    locations = pd.read_csv(locations_file, sep='\t', header=0)
+    mgi_file = "MGI_Coordinates.Build37.rpt.txt"
+    mgi = pd.read_csv(mgi_file, sep='\t', header=0)
+    loci = p_vals.columns
+
+    relevant, loc2 = create_gene_map_loc(mgi, p_vals)
+
+    cis_trans_df = cis_trans_for_all_loci(relevant, genotypes, loci)
+
+    ### Question 1 ###
+    counts = count_significant_cis_trans(p_vals, cis_trans_df)
+    sig = counts[0]
+    counts_val = counts[1]
+    print(counts_val)
+
+    ### Question 2 ###
+    plot_eQTL(eQTL_association_df(p_vals, genotypes))
+
+    ### Question 3 ###
+    sig_cis, sig_trans, cis, trans = create_eQTL_ditribution_data(p_vals, cis_trans_df)
+    plot_distribution_graph(cis, trans)
+    plot_distribution_graph(sig_cis, sig_trans)
+
+    ### Question 4 ###
+
+    TMP = create_snp_gene_df(sig, genotypes, relevant)
+
