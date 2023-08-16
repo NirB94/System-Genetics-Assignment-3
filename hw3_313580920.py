@@ -58,6 +58,7 @@ def association_model(genotypes_df, expression_df, alpha=0.05):
     final_mat['min_p_val'] = final_mat.min(axis=1)
     final_mat = final_mat[final_mat['min_p_val'] < alpha]
     final_mat.drop('min_p_val', axis='columns', inplace=True)
+    final_mat.set_index('data', inplace=True)
     return final_mat
 
 
@@ -91,7 +92,7 @@ def all_loci(gene, genotypes_df):
 def cis_trans_for_all_loci(genes, genotypes_df, every_loci):
     d = {}
     for i in range(len(genes)):
-        d[genes.iloc[i].name] = (every_loci(genes.iloc[i], genotypes_df))
+        d[genes.iloc[i].name] = (all_loci(genes.iloc[i], genotypes_df))
     d = pd.DataFrame(d).T
     d.index.rename('marker symbol', inplace=True)
     d = d.rename({i: every_loci[i] for i in range(len(list(d.columns)))}, axis='columns')
@@ -99,11 +100,13 @@ def cis_trans_for_all_loci(genes, genotypes_df, every_loci):
 
 
 def count_significant_cis_trans(p_values, cis_trans_s):
-    combined = pd.DataFrame(p_values.unstack().rename('p_values')).join(cis_trans_s.rename_axis('data').unstack().rename('cis-trans'))
+    combined = pd.DataFrame(p_values.unstack().rename('p_values')).join(
+        cis_trans_s.rename_axis('data').unstack().rename('cis-trans'))
     counts_df = pd.DataFrame(combined.loc[combined.p_values <= 0.05, 'cis-trans']).reset_index()
     counts_df.rename({'level_0': 'snp'}, axis=1, inplace=True)
     val_counts = counts_df['cis-trans'].value_counts()
-    counts_dict = {'Significant': val_counts['trans'] + val_counts['cis'], 'Cis': val_counts['cis'], 'Trans': val_counts['trans']}
+    counts_dict = {'Significant': val_counts['trans'] + val_counts['cis'], 'Cis': val_counts['cis'],
+                   'Trans': val_counts['trans']}
     return counts_df, counts_dict
 
 
@@ -124,13 +127,14 @@ def plot_eQTL(eQTL_df):
     eQTL_df['index'] = eQTL_df.index
     sns.set(font_scale=1.25)
     sns.set_style('dark')
-    plot = sns.relplot(data=eQTL_df, x='index', y='Count', aspect=3.7, hue='Chr_Build37', palette='dark', legend=None, s=200)
+    plot = sns.relplot(data=eQTL_df, x='index', y='Count', aspect=3.7, hue='Chr_Build37', palette='dark', legend=None,
+                       s=200)
     chrom_df = eQTL_df.groupby('Chr_Build37')['index'].median()
     plot.ax.set_xlabel('Chromosome No.')
     plot.ax.set_xticks(chrom_df)
     plot.ax.set_xticklabels(chrom_df.index)
     plot.fig.suptitle('Number of genes associated with each eQTL')
-    plot.set(yticks=[i for i in range(0,4)])
+    plot.set(yticks=[i for i in range(0, 4)])
     plt.savefig('genes-eQTLS association.png')
     plt.show()
 
@@ -165,11 +169,44 @@ def create_snp_gene_df(sig_df, genotypes_df, relevant_gene_map_loc_df):
     df.drop(['start', 'end'], axis=1, inplace=True)
     df['snp'] = df['snp'].astype(int)
     df = df.merge(genotypes_df[['Chr_Build37', 'Build37_position']], left_on='snp', right_index=True)
-    columns = ['gene name', 'gene location', 'gene chromosome', 'snp name', 'snp location', 'snp chromosome', 'cis-trans']
-    df.rename({'Chr_Build37': 'snp chromosome', 'Build37_position': 'snp location', 'snp': 'snp name'}, axis=1,
-               inplace=True)
+    columns = ['gene name', 'gene location', 'gene chromosome', 'snp name', 'snp location', 'snp chromosome',
+               'cis-trans']
+    df.rename({'data': 'gene name', 'chromosome': 'gene chromosome', 'Chr_Build37': 'snp chromosome',
+               'Build37_position': 'snp location', 'snp': 'snp name'}, axis=1, inplace=True)
     df = df[columns]
     return df
+
+
+def find_max_pos(chr_data):
+    ser = chr_data.groupby('representative genome chromosome')['representative genome end'].max()
+    for i in range(2, len(ser) + 1):
+        ser[i] += ser[i - 1]
+    return ser
+
+
+def plot_cis_trans_gene_position(chr_df, max_pos_ser):
+    chr_no = list(range(1, 21))
+    fig, ax = plt.subplots()
+    cis_fig = chr_df.loc[chr_df['cis-trans'] == 'cis']
+    x = cis_fig['normalized location of snp']
+    y = cis_fig['normalized location of gene']
+    cis_fig = ax.plot(x, y, 'o', label='cis', markersize=0)
+    trans_fig = chr_df.loc[chr_df['cis-trans'] == 'trans']
+    x = trans_fig['normalized location of snp']
+    y = trans_fig['normalized location of gene']
+    trans_fig = ax.plot(x, y, 'o', label='trans', markersize=0)
+    ax.set_ylabel('Gene Location')
+    ax.set_xlabel('SNP Location')
+    ax.legend()
+    ax.tick_params(axis='x', labelsize=9)
+    ax.tick_params(axis='y', labelsize=9)
+    #### MAYBE ADD CONDITION DUNNO NEED TO FIGURE EFFECT:
+    ax.set_xticks(max_pos_ser)
+    plt.xticks(max_pos_ser, chr_no)
+    ax.set_xticks(max_pos_ser)
+    plt.yticks(max_pos_ser, chr_no)
+
+    plt.show()
 
 
 if __name__ == '__main__':
@@ -207,4 +244,9 @@ if __name__ == '__main__':
     ### Question 4 ###
 
     TMP = create_snp_gene_df(sig, genotypes, relevant)
-
+    chr_data = loc2[(loc2['representative genome chromosome'] != 'Y') & (loc2['representative genome chromosome'] != 'MT')]
+    chr_data['representative genome chromosome'] = chr_data['representative genome chromosome'].astype(float)
+    max_pos = find_max_pos(chr_data)
+    ### FIGURE OUT LINES 359-362 AT ARIELLE'S CODE
+    
+    plot_cis_trans_gene_position(TMP, max_pos)
