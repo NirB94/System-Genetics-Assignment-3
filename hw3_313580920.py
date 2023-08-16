@@ -151,15 +151,15 @@ def create_eQTL_ditribution_data(p_values, cis_trans):
     return log_significant_cis_arr, log_significant_trans_arr, log_cis_arr, log_trans_arr
 
 
-def plot_distribution_graph(cis, trans):
+def plot_distribution_graph(cis, trans, sig):
     cis, trans = np.array(list(cis)), np.array(list(trans))
-    print(cis)
-    print(trans)
     g = sns.kdeplot(cis, color="r", label='Cis')
     sns.kdeplot(trans, color="b", label='Trans', bw=0.3)
     plt.legend(loc='upper right')
     g.set_ylabel('Density')
     g.set_xlabel('-log p value')
+    plt.title(f"Distribution of {sig} eQTLs P-values")
+    plt.savefig(f"Distribution of {sig} eQTLs P-values")
     plt.show()
 
 
@@ -174,6 +174,7 @@ def create_snp_gene_df(sig_df, genotypes_df, relevant_gene_map_loc_df):
     df.rename({'data': 'gene name', 'chromosome': 'gene chromosome', 'Chr_Build37': 'snp chromosome',
                'Build37_position': 'snp location', 'snp': 'snp name'}, axis=1, inplace=True)
     df = df[columns]
+    df['gene chromosome'] = df['gene chromosome'].astype(int)
     return df
 
 
@@ -184,28 +185,42 @@ def find_max_pos(chr_data):
     return ser
 
 
+def reg_location(df, max_pos_ser, is_gene=True):
+    form = 'gene' if is_gene else 'snp'
+    for i in range(len(df)):
+        df.loc[i, f'normalized location of {form}'] = calc_reg_loc(df.iloc[i], max_pos_ser, form)
+    return df
+
+
+def calc_reg_loc(gene, max_pos_ser, form):
+    if gene[f'{form} chromosome'] == 1:
+        return gene[f'{form} location']
+    else:
+        return gene[f'{form} location'] + max_pos_ser[gene[f'{form} chromosome'] - 1]
+
+
 def plot_cis_trans_gene_position(chr_df, max_pos_ser):
-    chr_no = list(range(1, 21))
+    chr_no = list(range(1,21))
     fig, ax = plt.subplots()
-    cis_fig = chr_df.loc[chr_df['cis-trans'] == 'cis']
-    x = cis_fig['normalized location of snp']
-    y = cis_fig['normalized location of gene']
-    cis_fig = ax.plot(x, y, 'o', label='cis', markersize=0)
-    trans_fig = chr_df.loc[chr_df['cis-trans'] == 'trans']
-    x = trans_fig['normalized location of snp']
-    y = trans_fig['normalized location of gene']
-    trans_fig = ax.plot(x, y, 'o', label='trans', markersize=0)
+    cis = chr_df.loc[chr_df['cis-trans'] == 'cis']
+    x = cis['normalized location of snp']
+    y = cis['normalized location of gene']
+    cis = ax.plot(x, y, 'o', label='cis', markersize=8)
+    trans = chr_df.loc[chr_df['cis-trans'] == 'trans']
+    x = trans['normalized location of snp']
+    y = trans['normalized location of gene']
+    trans = ax.plot(x, y, 'o', label='trans', markersize=3)
     ax.set_ylabel('Gene Location')
     ax.set_xlabel('SNP Location')
     ax.legend()
     ax.tick_params(axis='x', labelsize=9)
     ax.tick_params(axis='y', labelsize=9)
-    #### MAYBE ADD CONDITION DUNNO NEED TO FIGURE EFFECT:
     ax.set_xticks(max_pos_ser)
     plt.xticks(max_pos_ser, chr_no)
     ax.set_xticks(max_pos_ser)
     plt.yticks(max_pos_ser, chr_no)
-
+    plt.title('Visualization of cis and trans genes and SNPs locations')
+    plt.savefig('Visualization of cis and trans genes and SNPs locations.png')
     plt.show()
 
 
@@ -217,7 +232,7 @@ if __name__ == '__main__':
     genotypes = filtering(genotypes_file, strains.columns[1:])
 
     # p_vals = association_model(genotypes, strains)  ## Takes a long time, csv attached and imported in the line below:
-    p_vals = pd.read_csv("after association test.csv")
+    p_vals = pd.read_csv("after association test.csv", index_col=[0])
 
     mgi_file = "MGI_Coordinates.Build37.rpt.txt"
     mgi = pd.read_csv(mgi_file, sep='\t', header=0)
@@ -238,15 +253,14 @@ if __name__ == '__main__':
 
     ### Question 3 ###
     sig_cis, sig_trans, cis, trans = create_eQTL_ditribution_data(p_vals, cis_trans_df)
-    plot_distribution_graph(cis, trans)
-    plot_distribution_graph(sig_cis, sig_trans)
+    plot_distribution_graph(cis, trans, "all genome")
+    plot_distribution_graph(sig_cis, sig_trans, "significant")
 
     ### Question 4 ###
-
-    TMP = create_snp_gene_df(sig, genotypes, relevant)
+    gene_snp_locations = create_snp_gene_df(sig, genotypes, relevant)
     chr_data = loc2[(loc2['representative genome chromosome'] != 'Y') & (loc2['representative genome chromosome'] != 'MT')]
     chr_data['representative genome chromosome'] = chr_data['representative genome chromosome'].astype(float)
     max_pos = find_max_pos(chr_data)
-    ### FIGURE OUT LINES 359-362 AT ARIELLE'S CODE
-    
-    plot_cis_trans_gene_position(TMP, max_pos)
+    gene_snp_locations = reg_location(gene_snp_locations, max_pos)
+    gene_snp_locations = reg_location(gene_snp_locations, max_pos, is_gene=False)
+    plot_cis_trans_gene_position(gene_snp_locations, max_pos)
