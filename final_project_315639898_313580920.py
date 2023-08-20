@@ -6,6 +6,7 @@ import seaborn as sns
 import scipy.stats as st
 import preprocessing as pp
 import HW3
+import regression
 
 GENOTYPES = 'genotypes.xls'
 MGI = 'MGI_Coordinates.Build37.rpt.txt'
